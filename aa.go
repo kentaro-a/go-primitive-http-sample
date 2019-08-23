@@ -11,14 +11,14 @@ import (
 type Response struct {
 	StatusCode int    `json:"status_code"`
 	Text       string `json:"text"`
-	Conn       *net.Conn
+	Conn       net.Conn
 }
 
 func (res Response) response() {
 	b, _ := json.Marshal(res)
-	(*res.Conn).Write(b)
-	(*res.Conn).Write([]byte("\n"))
-	(*res.Conn).Close()
+	res.Conn.Write(b)
+	res.Conn.Write([]byte("\n"))
+	res.Conn.Close()
 }
 
 type Request struct {
@@ -60,12 +60,13 @@ func handler(conn net.Conn) {
 		_, err := conn.Read(buf)
 		if err != nil {
 			fmt.Println("Error reading:", err.Error())
+			break
 		}
 
 		res := Response{
 			StatusCode: 200,
 			Text:       "Ok",
-			Conn:       &conn,
+			Conn:       conn,
 		}
 		res.response()
 	}

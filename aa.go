@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	// "io"
 	"net"
 	"os"
-	// "reflect"
+	"strconv"
+	"strings"
 )
 
 type Response struct {
@@ -22,8 +25,12 @@ func (res Response) response() {
 }
 
 type Request struct {
-	Data   int    `json:"status_code"`
-	Method string `json:"text"`
+	Method  string
+	Path    string
+	Version string
+	Headers map[string]string
+	Data    map[string]string
+	Query   map[string]string
 }
 
 const (
@@ -50,24 +57,101 @@ func main() {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		go handler(conn)
+		// req := requestBinder(conn)
+		// go handler(req)
+		go requestBinder(conn)
+	}
+}
+
+func requestBinder(conn net.Conn) Request {
+	fmt.Print("Connected -> ")
+
+	req := Request{
+		Method:  "",
+		Path:    "",
+		Version: "",
+		Headers: map[string]string{},
+		Data:    map[string]string{},
+		Query:   map[string]string{},
+	}
+
+	reader := bufio.NewReader(conn)
+	line_num := 0
+
+	for {
+		bline, err := reader.ReadBytes('\n')
+		fmt.Println(bline, err)
+		if err == nil {
+			line := string(bline[:len(bline)-2])
+			fmt.Println(line_num, ": ", line)
+			if line_num == 0 {
+				_elem := strings.Split(line, " ")
+				req.Method = _elem[0]
+				req.Path = _elem[1]
+				req.Version = _elem[2]
+				parseQuery(req.Path, &req)
+
+			} else {
+				if line == "" {
+					fmt.Println("[line]", line, ": empty")
+				} else {
+					fmt.Println("[line]", line, ": not empty")
+				}
+				parseHeader(line, &req)
+			}
+			line_num++
+
+		} else {
+			break
+		}
+	}
+	fmt.Println("AAAAAAAAAAAA")
+
+	if content_length, exist := req.Headers["Content-Length"]; exist {
+		cl, err := strconv.Atoi(content_length)
+		if err == nil {
+			fmt.Println(cl)
+
+		}
+	}
+
+	fmt.Println("Scanner end")
+	return req
+}
+
+func parseData(str string, req *Request) {
+	data := strings.Split(str, "&")
+	for _, d := range data {
+		s := strings.Split(d, "=")
+		if len(s) == 2 && s[0] != "" {
+			req.Data[s[0]] = s[1]
+		}
+	}
+}
+
+func parseQuery(str string, req *Request) {
+	tmp := strings.Split(str, "?")
+	if len(tmp) >= 2 {
+		data := strings.Split(tmp[1], "&")
+		for _, d := range data {
+			s := strings.Split(d, "=")
+			if len(s) == 2 && s[0] != "" {
+				req.Query[s[0]] = s[1]
+			}
+		}
+	}
+}
+
+func parseHeader(str string, req *Request) {
+	headers := strings.Split(str, "&")
+	for _, h := range headers {
+		s := strings.Split(h, ":")
+		if len(s) >= 2 && s[0] != "" {
+			req.Headers[strings.TrimSpace(s[0])] = strings.TrimSpace(strings.Join(s[1:], ""))
+		}
 	}
 }
 
 func handler(conn net.Conn) {
-	for {
-		buf := make([]byte, 1024)
-		_, err := conn.Read(buf)
-		if err != nil {
-			fmt.Println("Error reading:", err.Error())
-			break
-		}
 
-		res := Response{
-			StatusCode: 200,
-			Text:       "Ok",
-			Conn:       conn,
-		}
-		res.response()
-	}
 }

@@ -10,11 +10,33 @@ import (
 	"time"
 )
 
+const (
+	CONN_HOST = "localhost"
+	CONN_PORT = "3333"
+	CONN_TYPE = "tcp"
+)
+
+var (
+	gcounter int = 0
+)
+
 type Response struct {
 	StatusCode int
 	StatusText string
 	Headers    map[string]string
 	Body       string
+	Conn       *net.Conn
+}
+
+type Request struct {
+	Method     string
+	Host       string
+	SourceHost string
+	Path       string
+	Version    string
+	Headers    map[string]string
+	Data       map[string]string
+	Query      map[string]string
 	Conn       *net.Conn
 }
 
@@ -25,30 +47,24 @@ func (res Response) response() {
 	}
 	responses = append(responses, "")
 	responses = append(responses, res.Body)
-	s := hstrings.Join(responses, "\r\n")
+	s := strings.Join(responses, "\r\n")
 	fmt.Println(s)
 	(*res.Conn).Write([]byte(s))
 	(*res.Conn).Close()
 }
 
-type Request struct {
-	Method  string
-	Host    string
-	Path    string
-	Version string
-	Headers map[string]string
-	Data    map[string]string
-	Query   map[string]string
-	Conn    *net.Conn
+
+type Router map[string]Handler {
+
 }
 
-const (
-	CONN_HOST = "localhost"
-	CONN_PORT = "3333"
-	CONN_TYPE = "tcp"
-)
 
-var gcounter int = 0
+
+type Handler struct{
+	Path string
+	Handler func()
+}
+
 
 func main() {
 	l, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
@@ -73,14 +89,15 @@ func main() {
 
 func translateHttp(conn *net.Conn) Request {
 	req := Request{
-		Method:  "",
-		Host:    (*conn).LocalAddr().String(),
-		Path:    "",
-		Version: "",
-		Headers: map[string]string{},
-		Data:    map[string]string{},
-		Query:   map[string]string{},
-		Conn:    conn,
+		Method:     "",
+		Host:       (*conn).LocalAddr().String(),
+		SourceHost: (*conn).RemoteAddr().String(),
+		Path:       "",
+		Version:    "",
+		Headers:    map[string]string{},
+		Data:       map[string]string{},
+		Query:      map[string]string{},
+		Conn:       conn,
 	}
 
 	(*req.Conn).SetReadDeadline(time.Now().Add(1 * time.Millisecond))
@@ -155,10 +172,13 @@ func parseHeader(str string, req *Request) {
 }
 
 func handler1(req *Request) {
-	req_info := map[string]string{
-		"method": req.Method,
-		"host":   req.Host,
-		"path":   req.Path,
+	req_info := map[string]interface{}{
+		"method":      req.Method,
+		"host":        req.Host,
+		"source_host": req.Host,
+		"path":        req.Path,
+		"query":       req.Query,
+		"data":        req.Data,
 	}
 	body, _ := json.Marshal(req_info)
 	res := Response{

@@ -4,28 +4,36 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
-	"strconv"
 	"strings"
+	"time"
 )
 
 type Response struct {
-	StatusCode int    `json:"status_code"`
-	Text       string `json:"text"`
-	Conn       net.Conn
+	StatusCode int
+	StatusText string
+	Headers    map[string]string
+	Body       string
+	Conn       *net.Conn
 }
 
 func (res Response) response() {
-	b, _ := json.Marshal(res)
-	res.Conn.Write(b)
-	res.Conn.Write([]byte("\n"))
-	res.Conn.Close()
+	responses := []string{fmt.Sprintf("HTTP/1.1 %d %s", res.StatusCode, res.StatusText)}
+	for k, v := range res.Headers {
+		responses = append(responses, fmt.Sprintf("%s: %s", k, v))
+	}
+	responses = append(responses, "")
+	responses = append(responses, res.Body)
+	s := hstrings.Join(responses, "\r\n")
+	fmt.Println(s)
+	(*res.Conn).Write([]byte(s))
+	(*res.Conn).Close()
 }
 
 type Request struct {
 	Method  string
+	Host    string
 	Path    string
 	Version string
 	Headers map[string]string
@@ -58,16 +66,15 @@ func main() {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// req := requestBinder(conn)
-		req := requestBinder(&conn)
-		fmt.Println(req.Method)
-		go handler(&req)
+		req := translateHttp(&conn)
+		go handler1(&req)
 	}
 }
 
-func requestBinder(conn *net.Conn) Request {
+func translateHttp(conn *net.Conn) Request {
 	req := Request{
 		Method:  "",
+		Host:    (*conn).LocalAddr().String(),
 		Path:    "",
 		Version: "",
 		Headers: map[string]string{},
@@ -76,58 +83,37 @@ func requestBinder(conn *net.Conn) Request {
 		Conn:    conn,
 	}
 
+	(*req.Conn).SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 	reader := bufio.NewReader(*req.Conn)
-
-	bb := make([]byte, 172)
-	n, err := io.ReadFull(*req.Conn, bb)
-	fmt.Println(n, err)
-	fmt.Println("")
-	fmt.Println(string(bb))
-	(*conn).Close()
-	return req
-
 	line_num := 0
+	is_body := false
 	for {
-		bline, err := reader.ReadBytes('\n')
-		if err == nil {
-			line := string(bline[:len(bline)-2])
-			fmt.Println(line)
-			if line_num == 0 {
-				parseRequestLine(line, &req)
-
-			} else {
-				if line == "" {
-					// fmt.Println("[line]", line, ": empty")
-					break
-				} else {
-					// fmt.Println("[line]", line, ": not empty")
-				}
-				// parseHeader(line, &req)
-			}
-			line_num++
-
-		} else {
+		bb, _, err := reader.ReadLine()
+		if err != nil {
 			break
 		}
-	}
+		line := string(bb)
 
-	fmt.Println("x0")
+		if line_num == 0 {
+			parseRequestLine(line, &req)
 
-	reader.ReadBytes('\n')
-	bline, _ := reader.ReadBytes('\n')
-	line := string(bline[:len(bline)-2])
-	fmt.Println(line)
-
-	if content_length, exist := req.Headers["Content-Length"]; exist {
-		cl, err := strconv.Atoi(content_length)
-		if err == nil {
-			fmt.Println(cl)
+		} else {
+			if line == "" {
+				is_body = true
+			} else {
+				if is_body {
+					parseData(line, &req)
+				} else {
+					parseHeader(line, &req)
+				}
+			}
 		}
+		line_num++
 	}
 	return req
 }
 
-func parseData(str string, req Request) {
+func parseData(str string, req *Request) {
 	data := strings.Split(str, "&")
 	for _, d := range data {
 		s := strings.Split(d, "=")
@@ -168,6 +154,19 @@ func parseHeader(str string, req *Request) {
 	}
 }
 
-func handler(req *Request) {
-	(*req.Conn).Close()
+func handler1(req *Request) {
+	req_info := map[string]string{
+		"method": req.Method,
+		"host":   req.Host,
+		"path":   req.Path,
+	}
+	body, _ := json.Marshal(req_info)
+	res := Response{
+		StatusCode: 200,
+		StatusText: "OK",
+		Headers:    map[string]string{"header1": "value1", "header2": "value2"},
+		Body:       string(body),
+		Conn:       req.Conn,
+	}
+	res.response()
 }

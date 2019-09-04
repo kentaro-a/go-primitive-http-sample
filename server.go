@@ -53,20 +53,24 @@ func (res Response) response() {
 	(*res.Conn).Close()
 }
 
+type Handler func(req *Request)
+type Route string
+type Router map[Route]Handler
 
-type Router map[string]Handler {
-
-}
-
-
-
-type Handler struct{
-	Path string
-	Handler func()
-}
-
+var router Router
 
 func main() {
+
+	router = make(map[Route]Handler)
+
+	router[Route("/")] = handler
+
+	r1 := Route("/r1")
+	router[r1] = handler1
+
+	r2 := Route("/r2")
+	router[r2] = handler2
+
 	l, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
@@ -83,7 +87,8 @@ func main() {
 			os.Exit(1)
 		}
 		req := translateHttp(&conn)
-		go handler1(&req)
+		fmt.Println(Route(req.Path))
+		go router[Route(req.Path)](&req)
 	}
 }
 
@@ -143,9 +148,9 @@ func parseData(str string, req *Request) {
 func parseRequestLine(str string, req *Request) {
 	_elem := strings.Split(str, " ")
 	req.Method = _elem[0]
-	req.Path = _elem[1]
+	req.Path = strings.Split(_elem[1], "?")[0]
 	req.Version = _elem[2]
-	parseQuery(req.Path, req)
+	parseQuery(_elem[1], req)
 }
 
 func parseQuery(str string, req *Request) {
@@ -171,7 +176,7 @@ func parseHeader(str string, req *Request) {
 	}
 }
 
-func handler1(req *Request) {
+func handler(req *Request) {
 	req_info := map[string]interface{}{
 		"method":      req.Method,
 		"host":        req.Host,
@@ -186,6 +191,28 @@ func handler1(req *Request) {
 		StatusText: "OK",
 		Headers:    map[string]string{"header1": "value1", "header2": "value2"},
 		Body:       string(body),
+		Conn:       req.Conn,
+	}
+	res.response()
+}
+
+func handler1(req *Request) {
+	res := Response{
+		StatusCode: 200,
+		StatusText: "OK",
+		Headers:    map[string]string{},
+		Body:       "handler1",
+		Conn:       req.Conn,
+	}
+	res.response()
+}
+
+func handler2(req *Request) {
+	res := Response{
+		StatusCode: 200,
+		StatusText: "OK",
+		Headers:    map[string]string{},
+		Body:       "handler2",
 		Conn:       req.Conn,
 	}
 	res.response()

@@ -48,7 +48,6 @@ func (res Response) response() {
 	responses = append(responses, "")
 	responses = append(responses, res.Body)
 	s := strings.Join(responses, "\r\n")
-	fmt.Println(s)
 	(*res.Conn).Write([]byte(s))
 	(*res.Conn).Close()
 }
@@ -87,7 +86,8 @@ func main() {
 			os.Exit(1)
 		}
 		req := translateHttp(&conn)
-		fmt.Println(Route(req.Path))
+
+		fmt.Printf("[%s]: %s%s\n", time.Now().Format("2006/1/2 15:04:05"), req.Host, req.Path)
 		go router[Route(req.Path)](&req)
 	}
 }

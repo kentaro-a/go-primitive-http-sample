@@ -1,11 +1,14 @@
 package main
 
+//go:generate go-assets-builder -s="/templates/" -o template.go -v Templates templates/
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
+	// "path/filepath"
 	"strings"
 	"time"
 )
@@ -16,9 +19,13 @@ const (
 	CONN_TYPE = "tcp"
 )
 
-var (
-	gcounter int = 0
-)
+type MyError struct {
+	Message string
+}
+
+func (e *MyError) Error() string {
+	return e.Message
+}
 
 type Response struct {
 	StatusCode int
@@ -53,22 +60,88 @@ func (res Response) response() {
 }
 
 type Handler func(req *Request)
-type Route string
-type Router map[Route]Handler
 
-var router Router
+type Route struct {
+	Paths []string
+	Handler
+}
+
+func NewRoute(paths interface{}, handler Handler) *Route {
+	switch v := paths.(type) {
+	case string:
+		return &Route{[]string{v}, handler}
+	case []string:
+		return &Route{v, handler}
+	default:
+		return &Route{nil, handler}
+	}
+}
+
+type Router struct {
+	Routes   []*Route
+	NotFound *Route
+	Error    *Route
+}
+
+func NewRouter() *Router {
+	return &Router{
+		NotFound: NewRoute(nil, func(req *Request) {
+			res := Response{
+				StatusCode: 404,
+				StatusText: "Not Found",
+				Headers:    map[string]string{},
+				Body:       "Default Page Not Found",
+				Conn:       req.Conn,
+			}
+			res.response()
+		}),
+		Error: NewRoute(nil, func(req *Request) {
+			res := Response{
+				StatusCode: 500,
+				StatusText: "Internal Server Error",
+				Headers:    map[string]string{},
+				Body:       "Default Internal Server Error",
+				Conn:       req.Conn,
+			}
+			res.response()
+		}),
+	}
+}
+
+func (router *Router) Match(path string) (*Route, error) {
+	for _, route := range router.Routes {
+		for _, _path := range route.Paths {
+			if _path == path {
+				return route, nil
+			}
+		}
+	}
+	return router.NotFound, nil
+}
+
+func (router *Router) Add(route *Route) {
+	router.Routes = append(router.Routes, route)
+}
+
+func (router *Router) AddNotFound(route *Route) {
+	router.NotFound = route
+}
+
+func (router *Router) AddError(route *Route) {
+	router.Error = route
+}
+
+var (
+	router *Router
+)
 
 func main() {
 
-	router = make(map[Route]Handler)
+	router = &Router{}
+	router.AddNotFound(NewRoute(nil, NotFoundHandler))
 
-	router[Route("/")] = handler
-
-	r1 := Route("/r1")
-	router[r1] = handler1
-
-	r2 := Route("/r2")
-	router[r2] = handler2
+	router.Add(NewRoute("/api", ApiHandler))
+	router.Add(NewRoute([]string{"", "/", "/home"}, HomeHandler))
 
 	l, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
@@ -80,7 +153,6 @@ func main() {
 
 	for {
 		conn, err := l.Accept()
-		gcounter++
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
@@ -88,7 +160,10 @@ func main() {
 		req := translateHttp(&conn)
 
 		fmt.Printf("[%s]: %s%s\n", time.Now().Format("2006/1/2 15:04:05"), req.Host, req.Path)
-		go router[Route(req.Path)](&req)
+		if r, err := router.Match(req.Path); err == nil {
+			go r.Handler(&req)
+		}
+
 	}
 }
 
@@ -105,7 +180,7 @@ func translateHttp(conn *net.Conn) Request {
 		Conn:       conn,
 	}
 
-	(*req.Conn).SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+	(*req.Conn).SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	reader := bufio.NewReader(*req.Conn)
 	line_num := 0
 	is_body := false
@@ -176,7 +251,17 @@ func parseHeader(str string, req *Request) {
 	}
 }
 
-func handler(req *Request) {
+func GetTemplate(template_name string) (string, error) {
+	f, err := Templates.Open(template_name)
+	if err != nil {
+		return "", err
+	} else {
+		b, _ := ioutil.ReadAll(f)
+		return string(b), nil
+	}
+}
+
+func ApiHandler(req *Request) {
 	req_info := map[string]interface{}{
 		"method":      req.Method,
 		"host":        req.Host,
@@ -185,34 +270,48 @@ func handler(req *Request) {
 		"query":       req.Query,
 		"data":        req.Data,
 	}
-	body, _ := json.Marshal(req_info)
+	body, _ := json.MarshalIndent(req_info, "", "\t")
 	res := Response{
 		StatusCode: 200,
 		StatusText: "OK",
-		Headers:    map[string]string{"header1": "value1", "header2": "value2"},
+		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       string(body),
 		Conn:       req.Conn,
 	}
 	res.response()
 }
 
-func handler1(req *Request) {
+func HomeHandler(req *Request) {
+	html, _ := GetTemplate("home.html")
 	res := Response{
 		StatusCode: 200,
 		StatusText: "OK",
-		Headers:    map[string]string{},
-		Body:       "handler1",
+		Headers:    map[string]string{"Content-Type": "text/html"},
+		Body:       html,
 		Conn:       req.Conn,
 	}
 	res.response()
 }
 
-func handler2(req *Request) {
+func NotFoundHandler(req *Request) {
+	html, _ := GetTemplate("404.html")
 	res := Response{
-		StatusCode: 200,
-		StatusText: "OK",
-		Headers:    map[string]string{},
-		Body:       "handler2",
+		StatusCode: 404,
+		StatusText: "Not Found",
+		Headers:    map[string]string{"Content-Type": "text/html"},
+		Body:       html,
+		Conn:       req.Conn,
+	}
+	res.response()
+}
+
+func ErrorHandler(req *Request) {
+	html, _ := GetTemplate("500.html")
+	res := Response{
+		StatusCode: 500,
+		StatusText: "Internal Server Error",
+		Headers:    map[string]string{"Content-Type": "text/html"},
+		Body:       html,
 		Conn:       req.Conn,
 	}
 	res.response()

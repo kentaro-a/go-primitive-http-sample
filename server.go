@@ -4,11 +4,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
-	// "path/filepath"
 	"strings"
 	"time"
 )
@@ -19,20 +19,16 @@ const (
 	CONN_TYPE = "tcp"
 )
 
-type MyError struct {
-	Message string
-}
-
-func (e *MyError) Error() string {
-	return e.Message
-}
-
 type Response struct {
 	StatusCode int
 	StatusText string
 	Headers    map[string]string
 	Body       string
-	Conn       *net.Conn
+	Request    *Request
+}
+
+func (res *Response) AddCommonHeader() {
+	res.Headers["Content-Length"] = fmt.Sprint((len([]byte(res.Body))))
 }
 
 type Request struct {
@@ -55,8 +51,8 @@ func (res Response) response() {
 	responses = append(responses, "")
 	responses = append(responses, res.Body)
 	s := strings.Join(responses, "\r\n")
-	(*res.Conn).Write([]byte(s))
-	(*res.Conn).Close()
+	(*res.Request.Conn).Write([]byte(s))
+	(*res.Request.Conn).Close()
 }
 
 type Handler func(req *Request)
@@ -84,25 +80,29 @@ type Router struct {
 }
 
 func NewRouter() *Router {
+	html404, _ := GetTemplate("404.html")
+	html500, _ := GetTemplate("500.html")
 	return &Router{
 		NotFound: NewRoute(nil, func(req *Request) {
 			res := Response{
 				StatusCode: 404,
 				StatusText: "Not Found",
-				Headers:    map[string]string{},
-				Body:       "Default Page Not Found",
-				Conn:       req.Conn,
+				Headers:    map[string]string{"Content-Type": "text/html"},
+				Body:       html404,
+				Request:    req,
 			}
+			res.AddCommonHeader()
 			res.response()
 		}),
 		Error: NewRoute(nil, func(req *Request) {
 			res := Response{
 				StatusCode: 500,
 				StatusText: "Internal Server Error",
-				Headers:    map[string]string{},
-				Body:       "Default Internal Server Error",
-				Conn:       req.Conn,
+				Headers:    map[string]string{"Content-Type": "text/html"},
+				Body:       html500,
+				Request:    req,
 			}
+			res.AddCommonHeader()
 			res.response()
 		}),
 	}
@@ -157,17 +157,19 @@ func main() {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		req := translateHttp(&conn)
-
-		fmt.Printf("[%s]: %s%s\n", time.Now().Format("2006/1/2 15:04:05"), req.Host, req.Path)
-		if r, err := router.Match(req.Path); err == nil {
-			go r.Handler(&req)
+		req, err := translateHttp(&conn)
+		if err == nil {
+			fmt.Printf("[%s]: %s%s\n", time.Now().Format("2006/1/2 15:04:05"), req.Host, req.Path)
+			if len(req.Headers) > 0 {
+				if r, err := router.Match(req.Path); err == nil {
+					go r.Handler(&req)
+				}
+			}
 		}
-
 	}
 }
 
-func translateHttp(conn *net.Conn) Request {
+func translateHttp(conn *net.Conn) (Request, error) {
 	req := Request{
 		Method:     "",
 		Host:       (*conn).LocalAddr().String(),
@@ -180,7 +182,7 @@ func translateHttp(conn *net.Conn) Request {
 		Conn:       conn,
 	}
 
-	(*req.Conn).SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	(*req.Conn).SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 	reader := bufio.NewReader(*req.Conn)
 	line_num := 0
 	is_body := false
@@ -207,7 +209,12 @@ func translateHttp(conn *net.Conn) Request {
 		}
 		line_num++
 	}
-	return req
+	if len(req.Headers) > 0 {
+		return req, nil
+	} else {
+		(*req.Conn).Close()
+		return req, errors.New("No Header")
+	}
 }
 
 func parseData(str string, req *Request) {
@@ -274,10 +281,13 @@ func ApiHandler(req *Request) {
 	res := Response{
 		StatusCode: 200,
 		StatusText: "OK",
-		Headers:    map[string]string{"Content-Type": "application/json"},
-		Body:       string(body),
-		Conn:       req.Conn,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body:    string(body),
+		Request: req,
 	}
+	res.AddCommonHeader()
 	res.response()
 }
 
@@ -286,10 +296,13 @@ func HomeHandler(req *Request) {
 	res := Response{
 		StatusCode: 200,
 		StatusText: "OK",
-		Headers:    map[string]string{"Content-Type": "text/html"},
-		Body:       html,
-		Conn:       req.Conn,
+		Headers: map[string]string{
+			"Content-Type": "text/html",
+		},
+		Body:    html,
+		Request: req,
 	}
+	res.AddCommonHeader()
 	res.response()
 }
 
@@ -298,10 +311,13 @@ func NotFoundHandler(req *Request) {
 	res := Response{
 		StatusCode: 404,
 		StatusText: "Not Found",
-		Headers:    map[string]string{"Content-Type": "text/html"},
-		Body:       html,
-		Conn:       req.Conn,
+		Headers: map[string]string{
+			"Content-Type": "text/html",
+		},
+		Body:    html,
+		Request: req,
 	}
+	res.AddCommonHeader()
 	res.response()
 }
 
@@ -310,9 +326,12 @@ func ErrorHandler(req *Request) {
 	res := Response{
 		StatusCode: 500,
 		StatusText: "Internal Server Error",
-		Headers:    map[string]string{"Content-Type": "text/html"},
-		Body:       html,
-		Conn:       req.Conn,
+		Headers: map[string]string{
+			"Content-Type": "text/html",
+		},
+		Body:    html,
+		Request: req,
 	}
+	res.AddCommonHeader()
 	res.response()
 }
